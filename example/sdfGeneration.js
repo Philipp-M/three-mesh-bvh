@@ -10,6 +10,7 @@ import { GenerateSDFMaterial } from './utils/GenerateSDFMaterial.js';
 import { RenderSDFLayerMaterial } from './utils/RenderSDFLayerMaterial.js';
 import { RayMarchSDFMaterial } from './utils/RayMarchSDFMaterial.js';
 import { RayMarchSDF2Material } from './utils/RayMarchSDF2Material.js';
+import { BVHShaderGLSL, MeshBVHUniformStruct } from '..';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 
 const params = {
@@ -17,10 +18,12 @@ const params = {
 	gpuGeneration: true,
 	resolution: 75,
 	resolutionScale: 0.1,
+	crossFade: 0.5,
 	margin: 0.2,
 	regenerate: () => updateSDF(),
 
-	mode: 'raymarchingField',
+	// mode: 'raymarchingField',
+	mode: 'geometry',
 	layer: 0,
 	surface: 0.1,
 
@@ -103,8 +106,70 @@ function init() {
 
 			bvh = result;
 
-			mesh = new THREE.Mesh( geometry, new THREE.MeshStandardMaterial() );
-			scene.add( mesh );
+			const mat = new THREE.MeshPhysicalMaterial({
+				color: "silver",
+				transmission: 0.0001, // Needed such that vWorldPosition is accessible... (There are cleaner ways obviously...)
+				metalness: 0.9,
+				roughness: 0.1,
+				onBeforeCompile: (shader) => {
+
+					shader.uniforms.crossFade = mat.userData.uniforms.crossFade;
+					shader.uniforms.bvh = mat.userData.uniforms.bvh;
+
+				 	shader.fragmentShader = `
+				 		uniform float crossFade;
+						${BVHShaderGLSL.common_functions}
+						${BVHShaderGLSL.bvh_struct_definitions}
+						${BVHShaderGLSL.bvh_ray_functions}
+						${BVHShaderGLSL.bvh_distance_functions}
+						uniform BVH bvh;
+
+						vec3 heatMap(float greyValue) {
+							vec3 heat;
+							heat.r = smoothstep(0.5, 0.8, greyValue);
+							if(greyValue >= 0.90) {
+								heat.r *= (1.1 - greyValue) * 5.0;
+							}
+							if(greyValue > 0.7) {
+								heat.g = smoothstep(1.0, 0.7, greyValue);
+							} else {
+								heat.g = smoothstep(0.0, 0.7, greyValue);
+							}
+							heat.b = smoothstep(1.0, 0.0, greyValue);
+								if(greyValue <= 0.3) {
+									heat.b *= greyValue / 0.3;
+								}
+							return heat;
+						}
+					 ${shader.fragmentShader}
+				 `.replace(
+						`#include <dithering_fragment>`,
+						`#include <dithering_fragment>
+	
+						// retrieve the distance and other values
+						uvec4 faceIndices;
+						vec3 faceNormal;
+						vec3 barycoord;
+						float side;
+						float rayDist;
+						vec3 outPoint;
+						float dist = bvhClosestPointToPoint( bvh, vWorldPosition.xyz*0.77, 100000.0, faceIndices, faceNormal, barycoord, side, outPoint );
+						vec3 nColor = heatMap(dist);
+						gl_FragColor.rgb = mix(gl_FragColor.rgb, nColor, crossFade);
+				 `,
+					);
+				},
+			});
+			// mat.uniforms.bvvh.value.updateFrom( bvh );
+			const bvhUniform = new MeshBVHUniformStruct();
+			bvhUniform.updateFrom(bvh);
+			mat.userData = {
+				uniforms: {
+				 	crossFade: {value: 0.5},
+					bvh: { value: bvhUniform }
+				}
+			};
+			mesh = new THREE.Mesh( geometry, mat );			scene.add( mesh );
 
 			updateSDF();
 
@@ -148,6 +213,9 @@ function rebuildGUI() {
 		rebuildGUI();
 
 	} );
+	if ( params.mode === 'geometry' ) {
+		displayFolder.add( params, 'crossFade', 0.0, 1.0 );
+	}
 
 	if ( params.mode === 'layer' ) {
 
@@ -321,6 +389,9 @@ function render() {
 
 	} else if ( params.mode === 'geometry' ) {
 
+		mesh.material.userData.uniforms.bvh.value.updateFrom( bvh );
+		mesh.material.userData.uniforms.crossFade.value = params.crossFade;
+		// console.log(mesh.material.uniforms, layerPass.material.uniforms);
 		// render the rasterized geometry
 		renderer.render( scene, camera );
 
