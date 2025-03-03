@@ -9,16 +9,18 @@ import { StaticGeometryGenerator } from '..';
 import { GenerateSDFMaterial } from './utils/GenerateSDFMaterial.js';
 import { RenderSDFLayerMaterial } from './utils/RenderSDFLayerMaterial.js';
 import { RayMarchSDFMaterial } from './utils/RayMarchSDFMaterial.js';
+import { RayMarchSDF2Material } from './utils/RayMarchSDF2Material.js';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 
 const params = {
 
 	gpuGeneration: true,
 	resolution: 75,
+	resolutionScale: 0.1,
 	margin: 0.2,
 	regenerate: () => updateSDF(),
 
-	mode: 'raymarching',
+	mode: 'raymarchingField',
 	layer: 0,
 	surface: 0.1,
 
@@ -26,9 +28,10 @@ const params = {
 
 let renderer, camera, scene, gui, stats, boxHelper;
 let outputContainer, bvh, geometry, sdfTex, mesh;
-let generateSdfPass, layerPass, raymarchPass;
+let generateSdfPass, layerPass, raymarchFieldPass, raymarchPass;
 let bvhGenerationWorker;
 const inverseBoundsMatrix = new THREE.Matrix4();
+const matrix = new THREE.Matrix4();
 
 init();
 render();
@@ -74,7 +77,8 @@ function init() {
 	layerPass = new FullScreenQuad( new RenderSDFLayerMaterial() );
 
 	// screen pass to render the sdf ray marching
-	raymarchPass = new FullScreenQuad( new RayMarchSDFMaterial() );
+	raymarchFieldPass = new FullScreenQuad( new RayMarchSDFMaterial() );
+	raymarchPass = new FullScreenQuad( new RayMarchSDF2Material() );
 
 	// load model and generate bvh
 	bvhGenerationWorker = new GenerateMeshBVHWorker();
@@ -134,12 +138,12 @@ function rebuildGUI() {
 
 	const generationFolder = gui.addFolder( 'generation' );
 	generationFolder.add( params, 'gpuGeneration' );
-	generationFolder.add( params, 'resolution', 10, 200, 1 );
+	generationFolder.add( params, 'resolution', 10, 1000, 1 );
 	generationFolder.add( params, 'margin', 0, 1 );
 	generationFolder.add( params, 'regenerate' );
 
 	const displayFolder = gui.addFolder( 'display' );
-	displayFolder.add( params, 'mode', [ 'geometry', 'raymarching', 'layer', 'grid layers' ] ).onChange( () => {
+	displayFolder.add( params, 'mode', [ 'geometry', 'raymarchingField', 'raymarching', 'layer', 'grid layers' ] ).onChange( () => {
 
 		rebuildGUI();
 
@@ -151,9 +155,15 @@ function rebuildGUI() {
 
 	}
 
-	if ( params.mode === 'raymarching' ) {
+	if ( params.mode === 'raymarchingField' || params.mode === 'raymarching' ) {
 
 		displayFolder.add( params, 'surface', - 0.2, 0.5 );
+
+	}
+
+	if ( params.mode === 'raymarching' ) {
+
+		displayFolder.add( params, 'resolutionScale', 0.01, 1.0 );
 
 	}
 
@@ -163,7 +173,7 @@ function rebuildGUI() {
 function updateSDF() {
 
 	const dim = params.resolution;
-	const matrix = new THREE.Matrix4();
+	// const matrix = new THREE.Matrix4();
 	const center = new THREE.Vector3();
 	const quat = new THREE.Quaternion();
 	const scale = new THREE.Vector3();
@@ -301,6 +311,9 @@ function render() {
 	stats.update();
 	requestAnimationFrame( render );
 
+	const dpr = window.devicePixelRatio;
+	renderer.setPixelRatio( dpr );
+
 	if ( ! sdfTex ) {
 
 		// render nothing
@@ -342,7 +355,7 @@ function render() {
 
 		layerPass.render( renderer );
 
-	} else if ( params.mode === 'raymarching' ) {
+	} else if ( params.mode === 'raymarchingField' ) {
 
 		// render the ray marched texture
 		camera.updateMatrixWorld();
@@ -360,11 +373,40 @@ function render() {
 		}
 
 		const { width, depth, height } = tex.image;
+		raymarchFieldPass.material.uniforms.sdfTex.value = tex;
+		raymarchFieldPass.material.uniforms.normalStep.value.set( 1 / width, 1 / height, 1 / depth );
+		raymarchFieldPass.material.uniforms.surface.value = params.surface;
+		raymarchFieldPass.material.uniforms.projectionInverse.value.copy( camera.projectionMatrixInverse );
+		raymarchFieldPass.material.uniforms.sdfTransformInverse.value.copy( mesh.matrixWorld ).invert().premultiply( inverseBoundsMatrix ).multiply( camera.matrixWorld );
+		raymarchFieldPass.render( renderer );
+
+	} else if (params.mode === 'raymarching') {
+
+		// render the ray marched texture
+		camera.updateMatrixWorld();
+		mesh.updateMatrixWorld();
+
+		let tex;
+		if ( sdfTex.isData3DTexture ) {
+
+			tex = sdfTex;
+
+		} else {
+
+			tex = sdfTex.texture;
+
+		}
+
+		const { width, depth, height } = tex.image;
+		raymarchPass.material.uniforms.bvh.value.updateFrom( bvh );
 		raymarchPass.material.uniforms.sdfTex.value = tex;
 		raymarchPass.material.uniforms.normalStep.value.set( 1 / width, 1 / height, 1 / depth );
 		raymarchPass.material.uniforms.surface.value = params.surface;
 		raymarchPass.material.uniforms.projectionInverse.value.copy( camera.projectionMatrixInverse );
 		raymarchPass.material.uniforms.sdfTransformInverse.value.copy( mesh.matrixWorld ).invert().premultiply( inverseBoundsMatrix ).multiply( camera.matrixWorld );
+		raymarchPass.material.uniforms.matrix.value.copy( matrix );
+		const dpr = window.devicePixelRatio * params.resolutionScale;
+		renderer.setPixelRatio( dpr );
 		raymarchPass.render( renderer );
 
 	}
