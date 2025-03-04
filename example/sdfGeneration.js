@@ -20,7 +20,7 @@ const params = {
 	resolution: 75,
 	resolutionScale: 0.1,
 	crossFade: 0.5,
-	heatMapRange: 1.0,
+	heatMapRange: 0.001,
 	margin: 0.2,
 	regenerate: () => updateSDF(),
 
@@ -75,6 +75,100 @@ function init() {
 		console.log(event);
 		orbit.enabled = !event.value;
 	});
+	window.addEventListener("keydown", function (event) {
+		switch (event.key) {
+			case "q":
+				controls.setSpace(controls.space === "local" ? "world" : "local");
+				break;
+
+			case "Shift":
+				controls.setTranslationSnap(1);
+				controls.setRotationSnap(THREE.MathUtils.degToRad(15));
+				controls.setScaleSnap(0.25);
+				break;
+
+			case "w":
+				controls.setMode("translate");
+				break;
+
+			case "e":
+				controls.setMode("rotate");
+				break;
+
+			case "r":
+				controls.setMode("scale");
+				break;
+
+			case "c":
+				const position = currentCamera.position.clone();
+
+				currentCamera = currentCamera.isPerspectiveCamera
+					? cameraOrtho
+					: cameraPersp;
+				currentCamera.position.copy(position);
+
+				orbit.object = currentCamera;
+				controls.camera = currentCamera;
+
+				currentCamera.lookAt(orbit.target.x, orbit.target.y, orbit.target.z);
+				onWindowResize();
+				break;
+
+			case "v":
+				const randomFoV = Math.random() + 0.1;
+				const randomZoom = Math.random() + 0.1;
+
+				cameraPersp.fov = randomFoV * 160;
+				cameraOrtho.bottom = -randomFoV * 500;
+				cameraOrtho.top = randomFoV * 500;
+
+				cameraPersp.zoom = randomZoom * 5;
+				cameraOrtho.zoom = randomZoom * 5;
+				onWindowResize();
+				break;
+
+			case "+":
+			case "=":
+				controls.setSize(controls.size + 0.1);
+				break;
+
+			case "-":
+			case "_":
+				controls.setSize(Math.max(controls.size - 0.1, 0.1));
+				break;
+
+			case "x":
+				controls.showX = !controls.showX;
+				break;
+
+			case "y":
+				controls.showY = !controls.showY;
+				break;
+
+			case "z":
+				controls.showZ = !controls.showZ;
+				break;
+
+			case " ":
+				controls.enabled = !controls.enabled;
+				break;
+
+			case "Escape":
+				controls.reset();
+				break;
+		}
+	});
+
+	window.addEventListener("keyup", function (event) {
+		switch (event.key) {
+			case "Shift":
+				controls.setTranslationSnap(null);
+				controls.setRotationSnap(null);
+				controls.setScaleSnap(null);
+				break;
+		}
+	});
+
 
 	// stats setup
 	stats = new Stats();
@@ -163,7 +257,7 @@ function init() {
 						float rayDist;
 						vec3 outPoint;
 						float dist = bvhClosestPointToPoint( bvh, vWorldPosition.xyz, 100000.0, faceIndices, faceNormal, barycoord, side, outPoint );
-						vec3 nColor = heatMap(clamp(dist / heatMapRange, 0.0, 1.0));
+						vec3 nColor = heatMap(clamp(abs(dist) / heatMapRange, 0.0, 1.0));
 						gl_FragColor.rgb = mix(gl_FragColor.rgb, nColor, crossFade);
 				 `,
 					);
@@ -175,7 +269,7 @@ function init() {
 			mat.userData = {
 				uniforms: {
 				 	crossFade: {value: 0.5},
-				 	heatMapRange: {value: 1.0},
+				 	heatMapRange: {value: 0.1},
 					bvh: { value: bvhUniform }
 				}
 			};
@@ -228,7 +322,7 @@ function rebuildGUI() {
 	} );
 	if ( params.mode === 'geometry' ) {
 		displayFolder.add( params, 'crossFade', 0.0, 1.0 );
-		displayFolder.add( params, 'heatMapRange', 0.1, 20.0 );
+		displayFolder.add( params, 'heatMapRange', 0.001, 20.0 );
 	}
 
 	if ( params.mode === 'layer' ) {
