@@ -17,13 +17,15 @@ let scene, camera, renderer, bvhMesh, helper, pointCloud, outputContainer;
 let mouse = new THREE.Vector2();
 let sphereCollision;
 
-const plyPath = 'https://raw.githubusercontent.com/gkjohnson/3d-demo-data/main/models/point-cloud-porsche/scene.ply';
+// const plyPath = 'https://raw.githubusercontent.com/gkjohnson/3d-demo-data/main/models/point-cloud-porsche/scene.ply';
+const plyPath = '/bunny/bunny/data/bun000.ply';
 const raycaster = new THREE.Raycaster();
 const params = {
 
 	displayHelper: false,
 	helperDepth: 10,
 	displayParents: false,
+	maxLeafTris: 10,
 
 	strategy: CENTER,
 	pointSize: 0.005,
@@ -49,7 +51,7 @@ function init() {
 	scene = new THREE.Scene();
 
 	// camera setup
-	camera = new THREE.PerspectiveCamera( 75, window.innerWidth / window.innerHeight, 0.1, 50 );
+	camera = new THREE.PerspectiveCamera( 75, window.innerWidth / window.innerHeight, 0.001, 50 );
 	camera.position.set( 3, 3, 3 );
 	camera.far = 100;
 	camera.updateProjectionMatrix();
@@ -76,9 +78,10 @@ function init() {
 		.load( plyPath, geometry => {
 
 			geometry.center();
-			const material = new THREE.PointsMaterial( { size: params.pointSize, vertexColors: true } );
+			const material = new THREE.PointsMaterial( { size: params.pointSize  } );
 			pointCloud = new THREE.Points( geometry, material );
-			pointCloud.matrixAutoUpdate = false;
+			pointCloud.scale.multiplyScalar(10.0);
+			// pointCloud.matrixAutoUpdate = false;
 
 			scene.add( pointCloud );
 
@@ -95,13 +98,15 @@ function init() {
 			bvhGeometry.setIndex( indices );
 			const bvhMaterial = new THREE.MeshBasicMaterial( { color: 0xff0000 } );
 			bvhMesh = new THREE.Mesh( bvhGeometry, bvhMaterial );
+			bvhMesh.scale.multiplyScalar(10.0);
 
 			console.time( 'computeBoundsTree' );
-			bvhMesh.geometry.computeBoundsTree( { mode: params.mode } );
+			bvhMesh.geometry.computeBoundsTree( { strategy: params.strategy, maxLeafTris: 1 } );
 			console.timeEnd( 'computeBoundsTree' );
 
 			helper = new MeshBVHHelper( bvhMesh, params.depth );
 			scene.add( helper );
+			// scene.add(  new THREE.Mesh( geometry, new THREE.MeshStandardMaterial() ) );
 
 		} );
 
@@ -133,7 +138,15 @@ function init() {
 	pointsFolder.add( params, 'strategy', { CENTER, AVERAGE, SAH } ).onChange( v => {
 
 		console.time( 'computeBoundsTree' );
-		bvhMesh.geometry.computeBoundsTree( { strategy: parseInt( v ) } );
+		bvhMesh.geometry.computeBoundsTree( { strategy: parseInt( v ), maxLeafTris: 1 } );
+		console.timeEnd( 'computeBoundsTree' );
+		helper.update();
+
+	} );
+	pointsFolder.add( params, 'maxLeafTris', 1, 30, 1 ).onChange( v => {
+
+		console.time( 'computeBoundsTree' );
+		bvhMesh.geometry.computeBoundsTree( { strategy: parseInt( params.strategy ), maxLeafTris: v } );
 		console.timeEnd( 'computeBoundsTree' );
 		helper.update();
 

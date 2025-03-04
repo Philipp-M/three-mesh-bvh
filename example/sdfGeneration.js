@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { PLYLoader } from 'three/examples/jsm/loaders/PLYLoader.js';
 import { FullScreenQuad } from 'three/examples/jsm/postprocessing/Pass.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { GUI } from 'three/examples/jsm/libs/lil-gui.module.min.js';
@@ -13,63 +14,72 @@ import { RayMarchSDF2Material } from './utils/RayMarchSDF2Material.js';
 import { BVHShaderGLSL, MeshBVHUniformStruct } from '..';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
+import { acceleratedRaycast, computeBoundsTree, disposeBoundsTree, MeshBVHHelper } from '..';
+
+THREE.Mesh.prototype.raycast = acceleratedRaycast;
+THREE.BufferGeometry.prototype.computeBoundsTree = computeBoundsTree;
+THREE.BufferGeometry.prototype.disposeBoundsTree = disposeBoundsTree;
 
 const params = {
 
 	gpuGeneration: true,
 	resolution: 75,
 	resolutionScale: 0.1,
-	crossFade: 0.5,
-	heatMapRange: 0.001,
+	opacityGeometry: 1.0,
+	opacityPointcloud: 1.0,
+	heatMapRangeGeometry: 0.01,
+	heatMapRangePointcloud: 0.4,
 	margin: 0.2,
 	regenerate: () => updateSDF(),
 
 	// mode: 'raymarchingField',
 	mode: 'geometry',
+	controls: 'pointcloud',
 	layer: 0,
 	surface: 0.1,
 
 };
 
 let renderer, camera, scene, gui, stats, boxHelper;
-let outputContainer, bvh, geometry, sdfTex, mesh;
+let outputContainer, bvh, geometry, sdfTex, mesh, pointCloud, bvhMesh, helper, meshSDFControls, pcSDFControls;
 let generateSdfPass, layerPass, raymarchFieldPass, raymarchPass;
 let bvhGenerationWorker;
 const inverseBoundsMatrix = new THREE.Matrix4();
 const matrix = new THREE.Matrix4();
+const plyPath = '/bunny/bunny/data/bun000.ply';
+
+
+const heatMapFragment = `
+vec4 heatMap(float greyValue) {
+	vec4 heat;
+
+	heat.r = smoothstep(0.5, 0.8, greyValue);
+	if(greyValue >= 0.90) {
+		heat.r *= (1.1 - greyValue) * 5.0;
+	}
+
+	if(greyValue > 0.7) {
+		heat.g = smoothstep(1.0, 0.7, greyValue);
+	} else {
+		heat.g = smoothstep(0.0, 0.7, greyValue);
+	}
+
+	heat.b = smoothstep(1.0, 0.0, greyValue);
+	if(greyValue <= 0.3) {
+		heat.b *= greyValue / 0.3;
+		heat.a = heat.b;
+	} else {
+		heat.a = 1.0;
+	}
+	return heat;
+}
+`;
+
 
 init();
 render();
 
-function init() {
-
-	outputContainer = document.getElementById( 'output' );
-
-	// renderer setup
-	renderer = new THREE.WebGLRenderer( { antialias: true } );
-	renderer.setPixelRatio( window.devicePixelRatio );
-	renderer.setSize( window.innerWidth, window.innerHeight );
-	renderer.setClearColor( 0, 0 );
-	document.body.appendChild( renderer.domElement );
-
-	// scene setup
-	scene = new THREE.Scene();
-
-	const light = new THREE.DirectionalLight( 0xffffff, 1 );
-	light.position.set( 1, 1, 1 );
-	scene.add( light );
-	scene.add( new THREE.AmbientLight( 0xffffff, 0.2 ) );
-
-	// camera setup
-	camera = new THREE.PerspectiveCamera( 75, window.innerWidth / window.innerHeight, 0.1, 50 );
-	camera.position.set( 1, 1, 2 );
-	camera.far = 100;
-	camera.updateProjectionMatrix();
-
-	boxHelper = new THREE.Box3Helper( new THREE.Box3() );
-	scene.add( boxHelper );
-
-	const orbit = new OrbitControls(camera, renderer.domElement);
+function createTransformControls(object, scene, camera, orbit) {
 	const controls = new TransformControls(camera, renderer.domElement);
 	controls.addEventListener("dragging-changed", function (event) {
 		console.log(event);
@@ -98,35 +108,6 @@ function init() {
 			case "r":
 				controls.setMode("scale");
 				break;
-
-			case "c":
-				const position = currentCamera.position.clone();
-
-				currentCamera = currentCamera.isPerspectiveCamera
-					? cameraOrtho
-					: cameraPersp;
-				currentCamera.position.copy(position);
-
-				orbit.object = currentCamera;
-				controls.camera = currentCamera;
-
-				currentCamera.lookAt(orbit.target.x, orbit.target.y, orbit.target.z);
-				onWindowResize();
-				break;
-
-			case "v":
-				const randomFoV = Math.random() + 0.1;
-				const randomZoom = Math.random() + 0.1;
-
-				cameraPersp.fov = randomFoV * 160;
-				cameraOrtho.bottom = -randomFoV * 500;
-				cameraOrtho.top = randomFoV * 500;
-
-				cameraPersp.zoom = randomZoom * 5;
-				cameraOrtho.zoom = randomZoom * 5;
-				onWindowResize();
-				break;
-
 			case "+":
 			case "=":
 				controls.setSize(controls.size + 0.1);
@@ -168,6 +149,42 @@ function init() {
 				break;
 		}
 	});
+	controls.attach( object );
+	const gizmo = controls.getHelper();
+	scene.add( gizmo );
+	return controls;
+}
+
+function init() {
+
+	outputContainer = document.getElementById( 'output' );
+
+	// renderer setup
+	renderer = new THREE.WebGLRenderer( { antialias: true } );
+	renderer.setPixelRatio( window.devicePixelRatio );
+	renderer.setSize( window.innerWidth, window.innerHeight );
+	renderer.setClearColor( 0, 0 );
+	document.body.appendChild( renderer.domElement );
+
+	// scene setup
+	scene = new THREE.Scene();
+
+	const light = new THREE.DirectionalLight( 0xffffff, 1 );
+	light.position.set( 1, 1, 1 );
+	scene.add( light );
+	scene.add( new THREE.AmbientLight( 0xffffff, 0.2 ) );
+
+	// camera setup
+	camera = new THREE.PerspectiveCamera( 75, window.innerWidth / window.innerHeight, 0.1, 50 );
+	camera.position.set( 1, 1, 2 );
+	camera.far = 100;
+	camera.updateProjectionMatrix();
+
+	boxHelper = new THREE.Box3Helper( new THREE.Box3() );
+	scene.add( boxHelper );
+
+	const orbit = new OrbitControls(camera, renderer.domElement);
+	mesh
 
 
 	// stats setup
@@ -186,6 +203,122 @@ function init() {
 
 	// load model and generate bvh
 	bvhGenerationWorker = new GenerateMeshBVHWorker();
+
+	const loader = new PLYLoader();
+	loader
+		.load( plyPath, geom => {
+
+			geom.center();
+			const material = new THREE.PointsMaterial( {
+				size: 0.01,
+				transparent: true,
+				// depthTest: false,
+				onBeforeCompile: (shader) => {
+					shader.uniforms.bvh = material.userData.uniforms.bvh;
+					shader.uniforms.heatMapRangePointcloud = material.userData.uniforms.heatMapRangePointcloud;
+					shader.vertexShader = `
+						varying vec3 vWorldPosition;
+						${shader.vertexShader}
+						`.replace(
+						`#include <worldpos_vertex>`,
+						`vec4 worldPosition = vec4( transformed, 1.0 );
+
+						#ifdef USE_BATCHING
+
+							worldPosition = batchingMatrix * worldPosition;
+
+						#endif
+
+						#ifdef USE_INSTANCING
+
+							worldPosition = instanceMatrix * worldPosition;
+
+						#endif
+
+						worldPosition = modelMatrix * worldPosition;
+						vWorldPosition = worldPosition.xyz;
+						`,
+					);
+				 	shader.fragmentShader = `
+						${BVHShaderGLSL.common_functions}
+						${BVHShaderGLSL.bvh_struct_definitions}
+						${BVHShaderGLSL.bvh_ray_functions}
+						${BVHShaderGLSL.bvh_distance_functions}
+
+				 		uniform float heatMapRangePointcloud;
+						uniform BVH bvh;
+						varying vec3 vWorldPosition;
+
+						${heatMapFragment}
+					  ${shader.fragmentShader}
+				 `.replace(
+						`#include <premultiplied_alpha_fragment>`,
+						`#include <premultiplied_alpha_fragment>
+	
+						// retrieve the distance and other values
+						uvec4 faceIndices;
+						vec3 faceNormal;
+						vec3 barycoord;
+						float side;
+						float rayDist;
+						vec3 outPoint;
+						float dist = bvhClosestPointToPoint( bvh, vWorldPosition.xyz, 100000.0, faceIndices, faceNormal, barycoord, side, outPoint );
+						gl_FragColor = heatMap(clamp(abs(dist) / heatMapRangePointcloud, 0.0, 1.0));
+						gl_FragColor.a *= opacity;
+				 `);
+					},
+			 } );
+			const bvhUniform = new MeshBVHUniformStruct();
+			material.userData = {
+				uniforms: {
+				 	heatMapRangePointcloud: {value: 0.1},
+					bvh: { value: bvhUniform }
+				}
+			};
+			pointCloud = new THREE.Points( geom, material );
+			pointCloud.scale.multiplyScalar(10.0);
+			pointCloud.position.addScalar(0.3);
+			console.log(pointCloud.material.userData.uniforms.heatMapRangePointcloud);
+
+			scene.add( pointCloud );
+			pcSDFControls = createTransformControls(pointCloud, scene, camera, orbit);
+			pcSDFControls.enabled = params.controls === 'pointcloud';
+			pcSDFControls.getHelper().visible = params.controls === 'pointcloud';
+
+			// BVH Mesh creation
+			const indices = [];
+			const bvhGeometry = geom.clone();
+			let verticesLength = bvhGeometry.attributes.position.count;
+			for ( let i = 0, l = verticesLength; i < l; i ++ ) {
+
+				indices.push( i, i, i );
+
+			}
+
+			bvhGeometry.setIndex( indices );
+			const bvhMaterial = new THREE.MeshBasicMaterial( { color: 0xff0000 } );
+			bvhMesh = new THREE.Mesh( bvhGeometry, bvhMaterial );
+			bvhMesh.scale.multiplyScalar(10.0);
+
+			console.time( 'computeBoundsTree' );
+			bvhMesh.geometry.computeBoundsTree( { strategy: params.strategy, maxLeafTris: 1 } );
+			console.timeEnd( 'computeBoundsTree' );
+
+			// helper = new MeshBVHHelper( bvhMesh, params.depth );
+			// scene.add( helper );
+			// console.log("point");
+			// scene.add(  new THREE.Mesh( geometry, new THREE.MeshStandardMaterial() ) );
+			//
+			// bvh = bvhMesh.geometry.boundsTree;
+
+			// bvhGenerationWorker
+			// 	.generate(bvhGeometry, { maxLeafTris: 1 })
+			// 	.then((result) => {
+			// 		bvh = result;
+			// 		console.log("yeye");
+			// 		// bvhUniform.updateFrom(bvh);
+			// 	});
+		} );
 
 	new GLTFLoader()
 		.setMeshoptDecoder( MeshoptDecoder )
@@ -208,43 +341,27 @@ function init() {
 			bvh = result;
 
 			const mat = new THREE.MeshPhysicalMaterial({
-				color: "silver",
 				transmission: 0.0001, // Needed such that vWorldPosition is accessible... (There are cleaner ways obviously...)
+				transparent: true,
+				// depthTest: false,
 				metalness: 0.9,
 				roughness: 0.1,
 				onBeforeCompile: (shader) => {
 
-					shader.uniforms.crossFade = mat.userData.uniforms.crossFade;
 					shader.uniforms.bvh = mat.userData.uniforms.bvh;
-					shader.uniforms.heatMapRange = mat.userData.uniforms.heatMapRange;
+					shader.uniforms.heatMapRangeGeometry = mat.userData.uniforms.heatMapRangeGeometry;
 
 				 	shader.fragmentShader = `
-				 		uniform float crossFade;
-				 		uniform float heatMapRange;
 						${BVHShaderGLSL.common_functions}
 						${BVHShaderGLSL.bvh_struct_definitions}
 						${BVHShaderGLSL.bvh_ray_functions}
 						${BVHShaderGLSL.bvh_distance_functions}
+
+				 		uniform float heatMapRangeGeometry;
 						uniform BVH bvh;
 
-						vec3 heatMap(float greyValue) {
-							vec3 heat;
-							heat.r = smoothstep(0.5, 0.8, greyValue);
-							if(greyValue >= 0.90) {
-								heat.r *= (1.1 - greyValue) * 5.0;
-							}
-							if(greyValue > 0.7) {
-								heat.g = smoothstep(1.0, 0.7, greyValue);
-							} else {
-								heat.g = smoothstep(0.0, 0.7, greyValue);
-							}
-							heat.b = smoothstep(1.0, 0.0, greyValue);
-								if(greyValue <= 0.3) {
-									heat.b *= greyValue / 0.3;
-								}
-							return heat;
-						}
-					 ${shader.fragmentShader}
+						${heatMapFragment}
+					  ${shader.fragmentShader}
 				 `.replace(
 						`#include <dithering_fragment>`,
 						`#include <dithering_fragment>
@@ -257,26 +374,28 @@ function init() {
 						float rayDist;
 						vec3 outPoint;
 						float dist = bvhClosestPointToPoint( bvh, vWorldPosition.xyz, 100000.0, faceIndices, faceNormal, barycoord, side, outPoint );
-						vec3 nColor = heatMap(clamp(abs(dist) / heatMapRange, 0.0, 1.0));
-						gl_FragColor.rgb = mix(gl_FragColor.rgb, nColor, crossFade);
+						gl_FragColor = heatMap(clamp(abs(dist) / heatMapRangeGeometry, 0.0, 1.0));
+						gl_FragColor.a *= opacity;
 				 `,
 					);
 				},
 			});
 			// mat.uniforms.bvvh.value.updateFrom( bvh );
 			const bvhUniform = new MeshBVHUniformStruct();
-			bvhUniform.updateFrom(bvh);
+			// bvhUniform.updateFrom(bvh);
 			mat.userData = {
 				uniforms: {
-				 	crossFade: {value: 0.5},
-				 	heatMapRange: {value: 0.1},
+				 	heatMapRangeGeometry: {value: 0.1},
 					bvh: { value: bvhUniform }
 				}
 			};
-			mesh = new THREE.Mesh( geometry, mat );			scene.add( mesh );
-			controls.attach( mesh );
-			const gizmo = controls.getHelper();
-			scene.add( gizmo );
+			// Reference mesh representing SDF
+			scene.add( new THREE.Mesh( geometry, new THREE.MeshStandardMaterial({ depthWrite: false }) ) );
+			mesh = new THREE.Mesh( geometry, mat );
+			scene.add( mesh );
+			meshSDFControls = createTransformControls( mesh, scene, camera, orbit );
+			meshSDFControls.enabled = params.controls === 'mesh';
+			meshSDFControls.getHelper().visible = params.controls === 'mesh';
 
 			updateSDF();
 
@@ -320,9 +439,17 @@ function rebuildGUI() {
 		rebuildGUI();
 
 	} );
+	displayFolder.add( params, 'controls', [ 'pointcloud', 'mesh' ] ).onChange( (c) => {
+			pcSDFControls.enabled = c === 'pointcloud';
+			pcSDFControls.getHelper().visible = c === 'pointcloud';
+			meshSDFControls.enabled = c === 'mesh';
+			meshSDFControls.getHelper().visible = c === 'mesh';
+	} );
 	if ( params.mode === 'geometry' ) {
-		displayFolder.add( params, 'crossFade', 0.0, 1.0 );
-		displayFolder.add( params, 'heatMapRange', 0.001, 20.0 );
+		displayFolder.add( params, 'opacityGeometry', 0.0, 1.0 );
+		displayFolder.add( params, 'opacityPointcloud', 0.0, 1.0 );
+		displayFolder.add( params, 'heatMapRangeGeometry', 0.001, 2.0 );
+		displayFolder.add( params, 'heatMapRangePointcloud', 0.001, 2.0 );
 	}
 
 	if ( params.mode === 'layer' ) {
@@ -352,15 +479,15 @@ function updateSDF() {
 	// const matrix = new THREE.Matrix4();
 	const center = new THREE.Vector3();
 	const quat = new THREE.Quaternion();
-	const scale = new THREE.Vector3();
+	const scale = new THREE.Vector3(1, 1, 1);
 
 	// compute the bounding box of the geometry including the margin which is used to
 	// define the range of the SDF
-	geometry.boundingBox.getCenter( center );
-	scale.subVectors( geometry.boundingBox.max, geometry.boundingBox.min );
-	scale.x += 2 * params.margin;
-	scale.y += 2 * params.margin;
-	scale.z += 2 * params.margin;
+	// geometry.boundingBox.getCenter( center );
+	// scale.subVectors( geometry.boundingBox.max, geometry.boundingBox.min );
+	// scale.x += 2 * params.margin;
+	// scale.y += 2 * params.margin;
+	// scale.z += 2 * params.margin;
 	matrix.compose( center, quat, scale );
 	inverseBoundsMatrix.copy( matrix ).invert();
 
@@ -497,9 +624,12 @@ function render() {
 
 	} else if ( params.mode === 'geometry' ) {
 
+		pointCloud.material.userData.uniforms.bvh.value.updateFrom( bvh );
+		pointCloud.material.userData.uniforms.heatMapRangePointcloud.value = params.heatMapRangePointcloud;
+		pointCloud.material.opacity = params.opacityPointcloud;
 		mesh.material.userData.uniforms.bvh.value.updateFrom( bvh );
-		mesh.material.userData.uniforms.crossFade.value = params.crossFade;
-		mesh.material.userData.uniforms.heatMapRange.value = params.heatMapRange;
+		mesh.material.userData.uniforms.heatMapRangeGeometry.value = params.heatMapRangeGeometry;
+		mesh.material.opacity = params.opacityGeometry;
 		// console.log(mesh.material.uniforms, layerPass.material.uniforms);
 		// render the rasterized geometry
 		renderer.render( scene, camera );
