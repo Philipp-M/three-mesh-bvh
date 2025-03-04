@@ -25,6 +25,7 @@ const params = {
 	gpuGeneration: true,
 	resolution: 75,
 	resolutionScale: 0.1,
+	resolutionScaleGeometry: 1.0,
 	opacityGeometry: 1.0,
 	opacityPointcloud: 1.0,
 	heatMapRangeGeometry: 0.01,
@@ -46,7 +47,7 @@ let generateSdfPass, layerPass, raymarchFieldPass, raymarchPass;
 let bvhGenerationWorker;
 const inverseBoundsMatrix = new THREE.Matrix4();
 const matrix = new THREE.Matrix4();
-const plyPath = '/bunny/bunny/data/bun000.ply';
+const plyPath = './bunny/bunny/data/bun000.ply';
 
 
 const heatMapFragment = `
@@ -275,6 +276,9 @@ function init() {
 					bvh: { value: bvhUniform }
 				}
 			};
+			if (bvh) {
+				pointCloud.material.userData.uniforms.bvh.value.updateFrom(bvh);
+			}
 			pointCloud = new THREE.Points( geom, material );
 			pointCloud.scale.multiplyScalar(10.0);
 			pointCloud.position.addScalar(0.3);
@@ -382,7 +386,10 @@ function init() {
 			});
 			// mat.uniforms.bvvh.value.updateFrom( bvh );
 			const bvhUniform = new MeshBVHUniformStruct();
-			// bvhUniform.updateFrom(bvh);
+			bvhUniform.updateFrom(bvh);
+			if (pointCloud.material.userData.uniforms.bvh) {
+				pointCloud.material.userData.uniforms.bvh.value.updateFrom(bvh);
+			}
 			mat.userData = {
 				uniforms: {
 				 	heatMapRangeGeometry: {value: 0.1},
@@ -450,6 +457,7 @@ function rebuildGUI() {
 		displayFolder.add( params, 'opacityPointcloud', 0.0, 1.0 );
 		displayFolder.add( params, 'heatMapRangeGeometry', 0.001, 2.0 );
 		displayFolder.add( params, 'heatMapRangePointcloud', 0.001, 2.0 );
+		displayFolder.add( params, 'resolutionScaleGeometry', 0.01, 1.0 );
 	}
 
 	if ( params.mode === 'layer' ) {
@@ -624,14 +632,16 @@ function render() {
 
 	} else if ( params.mode === 'geometry' ) {
 
-		pointCloud.material.userData.uniforms.bvh.value.updateFrom( bvh );
+		// pointCloud.material.userData.uniforms.bvh.value.updateFrom( bvh );
 		pointCloud.material.userData.uniforms.heatMapRangePointcloud.value = params.heatMapRangePointcloud;
 		pointCloud.material.opacity = params.opacityPointcloud;
-		mesh.material.userData.uniforms.bvh.value.updateFrom( bvh );
+		// mesh.material.userData.uniforms.bvh.value.updateFrom( bvh );
 		mesh.material.userData.uniforms.heatMapRangeGeometry.value = params.heatMapRangeGeometry;
 		mesh.material.opacity = params.opacityGeometry;
 		// console.log(mesh.material.uniforms, layerPass.material.uniforms);
 		// render the rasterized geometry
+		const dpr = window.devicePixelRatio * params.resolutionScaleGeometry;
+		renderer.setPixelRatio( dpr );
 		renderer.render( scene, camera );
 
 	} else if ( params.mode === 'layer' || params.mode === 'grid layers' ) {
