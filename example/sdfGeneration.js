@@ -12,6 +12,7 @@ import { RayMarchSDFMaterial } from './utils/RayMarchSDFMaterial.js';
 import { RayMarchSDF2Material } from './utils/RayMarchSDF2Material.js';
 import { BVHShaderGLSL, MeshBVHUniformStruct } from '..';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
+import { TransformControls } from 'three/addons/controls/TransformControls.js';
 
 const params = {
 
@@ -19,6 +20,7 @@ const params = {
 	resolution: 75,
 	resolutionScale: 0.1,
 	crossFade: 0.5,
+	heatMapRange: 1.0,
 	margin: 0.2,
 	regenerate: () => updateSDF(),
 
@@ -67,7 +69,12 @@ function init() {
 	boxHelper = new THREE.Box3Helper( new THREE.Box3() );
 	scene.add( boxHelper );
 
-	new OrbitControls( camera, renderer.domElement );
+	const orbit = new OrbitControls(camera, renderer.domElement);
+	const controls = new TransformControls(camera, renderer.domElement);
+	controls.addEventListener("dragging-changed", function (event) {
+		console.log(event);
+		orbit.enabled = !event.value;
+	});
 
 	// stats setup
 	stats = new Stats();
@@ -115,9 +122,11 @@ function init() {
 
 					shader.uniforms.crossFade = mat.userData.uniforms.crossFade;
 					shader.uniforms.bvh = mat.userData.uniforms.bvh;
+					shader.uniforms.heatMapRange = mat.userData.uniforms.heatMapRange;
 
 				 	shader.fragmentShader = `
 				 		uniform float crossFade;
+				 		uniform float heatMapRange;
 						${BVHShaderGLSL.common_functions}
 						${BVHShaderGLSL.bvh_struct_definitions}
 						${BVHShaderGLSL.bvh_ray_functions}
@@ -153,8 +162,8 @@ function init() {
 						float side;
 						float rayDist;
 						vec3 outPoint;
-						float dist = bvhClosestPointToPoint( bvh, vWorldPosition.xyz*0.77, 100000.0, faceIndices, faceNormal, barycoord, side, outPoint );
-						vec3 nColor = heatMap(dist);
+						float dist = bvhClosestPointToPoint( bvh, vWorldPosition.xyz, 100000.0, faceIndices, faceNormal, barycoord, side, outPoint );
+						vec3 nColor = heatMap(clamp(dist / heatMapRange, 0.0, 1.0));
 						gl_FragColor.rgb = mix(gl_FragColor.rgb, nColor, crossFade);
 				 `,
 					);
@@ -166,10 +175,14 @@ function init() {
 			mat.userData = {
 				uniforms: {
 				 	crossFade: {value: 0.5},
+				 	heatMapRange: {value: 1.0},
 					bvh: { value: bvhUniform }
 				}
 			};
 			mesh = new THREE.Mesh( geometry, mat );			scene.add( mesh );
+			controls.attach( mesh );
+			const gizmo = controls.getHelper();
+			scene.add( gizmo );
 
 			updateSDF();
 
@@ -215,6 +228,7 @@ function rebuildGUI() {
 	} );
 	if ( params.mode === 'geometry' ) {
 		displayFolder.add( params, 'crossFade', 0.0, 1.0 );
+		displayFolder.add( params, 'heatMapRange', 0.1, 20.0 );
 	}
 
 	if ( params.mode === 'layer' ) {
@@ -391,6 +405,7 @@ function render() {
 
 		mesh.material.userData.uniforms.bvh.value.updateFrom( bvh );
 		mesh.material.userData.uniforms.crossFade.value = params.crossFade;
+		mesh.material.userData.uniforms.heatMapRange.value = params.heatMapRange;
 		// console.log(mesh.material.uniforms, layerPass.material.uniforms);
 		// render the rasterized geometry
 		renderer.render( scene, camera );
