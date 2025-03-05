@@ -305,7 +305,7 @@ function init() {
 			bvhMesh.scale.multiplyScalar(10.0);
 
 			console.time( 'computeBoundsTree' );
-			bvhMesh.geometry.computeBoundsTree( { strategy: params.strategy, maxLeafTris: 1 } );
+			bvhMesh.geometry.computeBoundsTree( { strategy: params.strategy, maxLeafTris: 4 } );
 			console.timeEnd( 'computeBoundsTree' );
 
 			// helper = new MeshBVHHelper( bvhMesh, params.depth );
@@ -337,7 +337,7 @@ function init() {
 
 			geometry = staticGen.generate().center();
 
-			return bvhGenerationWorker.generate( geometry, { maxLeafTris: 1 } );
+			return bvhGenerationWorker.generate( geometry, { maxLeafTris: 4 } );
 
 		} )
 		.then( result => {

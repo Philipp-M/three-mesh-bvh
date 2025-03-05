@@ -73,9 +73,16 @@ float distanceToTriangles(
 		vec3 c = texelFetch1D( positionAttr, indices.z ).rgb;
 
 		// get the closest point and barycoord
-		vec3 closestPoint = closestPointToTriangle( point, a, b, c, localBarycoord );
-		vec3 delta = point - closestPoint;
-		float sqDist = dot2( delta );
+		// vec3 closestPoint = closestPointToTriangle( point, a, b, c, localBarycoord );
+		// vec3 delta = point - closestPoint;
+		// float sqDist = dot2( delta );
+		vec3 deltaA = point - a;
+		float sqDistA = dot2( deltaA );
+		vec3 deltaB = point - b;
+		float sqDistB = dot2( deltaB );
+		vec3 deltaC = point - c;
+		float sqDistC = dot2( deltaC );
+		float sqDist = min(min(sqDistA, sqDistB), sqDistC);
 		if ( sqDist < closestDistanceSquared ) {
 
 			// set the output results
@@ -83,8 +90,9 @@ float distanceToTriangles(
 			faceIndices = uvec4( indices.xyz, i );
 			faceNormal = normalize( cross( a - b, b - c ) );
 			barycoord = localBarycoord;
-			outPoint = closestPoint;
-			side = sign( dot( faceNormal, delta ) );
+			outPoint = a;
+			// side = sign( dot( faceNormal, delta ) );
+			side = 1.0;
 
 		}
 
