@@ -18,23 +18,30 @@ export default [
 	// recommended
 	js.configs.recommended,
 
-	// base rules
 	{
-		name: 'base rules',
-		files: [ '**/*.js', '**/*.ts' ],
 		languageOptions: {
 			ecmaVersion: 2020,
-			sourceType: 'module',
-			globals: {
-				...globals.browser,
-				...globals.node,
-			},
-		},
-		rules: {
-			...mdcs.rules,
-			'no-mixed-spaces-and-tabs': 'error',
+			sourceType: "module",
 		},
 	},
+
+	// base rules
+	// {
+	// 	name: 'base rules',
+	// 	files: [ '**/*.js', '**/*.ts' ],
+	// 	languageOptions: {
+	// 		ecmaVersion: 2020,
+	// 		sourceType: 'module',
+	// 		globals: {
+	// 			...globals.browser,
+	// 			...globals.node,
+	// 		},
+	// 	},
+	// 	rules: {
+	// 		...mdcs.rules,
+	// 		'no-mixed-spaces-and-tabs': 'error',
+	// 	},
+	// },
 
 	// ts recommended
 	...tseslint.configs.recommended.map( config => ( {
